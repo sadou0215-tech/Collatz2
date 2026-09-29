@@ -11,6 +11,8 @@
 body{margin:0;padding:24px 16px;background:var(--bg);color:var(--fg);font-family:"Hiragino Sans","Yu Gothic",Meiryo,sans-serif;line-height:1.7}
 .wrap{max-width:680px;margin:0 auto;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:24px}
 h1{font-size:1.4rem;margin:0 0 4px}
+.modebtn{padding:0;background:none;color:var(--fg);font:inherit;font-weight:bold;text-align:left;border:0;border-bottom:2px dotted var(--acc);border-radius:0;cursor:pointer}
+.modebtn small{font-weight:normal;font-size:.75rem;color:var(--acc);margin-left:6px}
 p.lead{margin:0 0 16px;color:var(--sub)}
 .row{display:flex;gap:8px;flex-wrap:wrap}
 input{flex:1 1 180px;min-width:0;padding:10px;font-size:1rem;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg)}
@@ -32,8 +34,8 @@ th{position:sticky;top:0;background:var(--card)}
 </head>
 <body>
 <div class="wrap">
-  <h1>コラッツ予想 自動計算</h1>
-  <p class="lead">正の整数を入力すると、1になるまで計算します。偶数なら÷2、奇数なら×3+1。</p>
+  <h1><button type="button" class="modebtn" id="modeBtn" aria-live="polite"><span id="title">コラッツ予想 自動計算</span><small>⇄ タップで切り替え</small></button></h1>
+  <p class="lead" id="lead"></p>
   <div class="row">
     <input type="text" id="start" inputmode="numeric" value="27" aria-label="開始する整数">
     <button id="calc">計算スタート</button>
@@ -42,21 +44,41 @@ th{position:sticky;top:0;background:var(--card)}
 
   <div id="result" class="hidden">
     <div class="stats" id="stats"></div>
-    <svg id="chart" viewBox="0 0 600 240" role="img" aria-label="値の推移グラフ"></svg>
-    <p class="note">縦軸は対数目盛です。</p>
-    <div class="tablebox"><table>
-      <thead><tr><th>#</th><th>値</th><th>操作</th></tr></thead>
-      <tbody id="rows"></tbody>
-    </table></div>
-    <p class="note" id="truncNote"></p>
+    <div id="chartBox">
+      <svg id="chart" viewBox="0 0 600 240" role="img" aria-label="値の推移グラフ"></svg>
+      <p class="note">縦軸は対数目盛です。</p>
+    </div>
+    <div id="tableBox">
+      <div class="tablebox"><table>
+        <thead><tr id="head"></tr></thead>
+        <tbody id="rows"></tbody>
+      </table></div>
+      <p class="note" id="truncNote"></p>
+    </div>
   </div>
 </div>
 
 <script>
-const MAX_STEPS = 100000;
+const MAX_STEPS = 100000;   // コラッツ用の上限
+const MAX_DIV = 1000000;    // 素数判定で試す割る数の上限
 const MAX_ROWS = 5000;
 const $ = id => document.getElementById(id);
 
+const MODES = {
+  collatz: {
+    title: 'コラッツ予想 自動計算',
+    lead: '正の整数を入力すると、1になるまで計算します。偶数なら÷2、奇数なら×3+1。',
+    def: '27'
+  },
+  prime: {
+    title: '素数計算機',
+    lead: '整数を入力すると、素数か、素数のかけ算にするとどうなるかを表示します。例：91 = 7 × 13',
+    def: '91'
+  }
+};
+let mode = 'collatz';
+
+/* ---------- コラッツ ---------- */
 function collatz(n){
   const seq = [n], ops = ['開始'];
   let peak = n, odd = 0, even = 0;
@@ -84,45 +106,107 @@ function drawChart(seq){
   $('chart').innerHTML = '<polyline points="'+pts+'" fill="none" stroke="var(--acc)" stroke-width="1.6" stroke-linejoin="round"/>';
 }
 
-function run(){
-  $('calcErr').textContent = '';
-  const raw = $('start').value.trim().replace(/[,\s]/g,'');
-  if (!/^[0-9]+$/.test(raw) || BigInt(raw) < 1n){
-    $('calcErr').textContent = '1以上の正の整数を入力してください。';
-    return;
+/* ---------- 素数 ---------- */
+function factorize(n){
+  const factors = [];
+  let m = n, d = 2n, count = 0;
+  while (d * d <= m && count < MAX_DIV){
+    if (m % d === 0n){ factors.push(d); m /= d; }
+    else { d += (d === 2n) ? 1n : 2n; }
+    count++;
   }
-  const r = collatz(BigInt(raw));
-  const steps = r.seq.length - 1;
+  const limited = d * d <= m;   // 上限で止まり、残りが未判定
+  if (!limited && m > 1n) factors.push(m);
+  return { factors, limited };
+}
+function formatFactors(fs){
+  const groups = [];
+  for (const f of fs){
+    const g = groups[groups.length - 1];
+    if (g && g[0] === f) g[1]++; else groups.push([f, 1]);
+  }
+  return groups.map(([f, k]) => k > 1 ? f + '^' + k : f.toString()).join(' × ');
+}
 
-  const items = [
-    ['入力した値', raw],
-    ['1になるまでの回数', steps + '回' + (r.done ? '' : '（上限で停止）')],
-    ['最大値', r.peak.toString()],
-    ['÷2 の回数 / ×3+1 の回数', r.even + ' / ' + r.odd]
-  ];
+/* ---------- 表示共通 ---------- */
+function showStats(items){
   $('stats').replaceChildren(...items.map(([label, val]) => {
     const d = document.createElement('div'); d.className = 'stat';
     const b = document.createElement('b'); b.textContent = val;
     const s = document.createElement('span'); s.textContent = label;
     d.append(b, s); return d;
   }));
-
-  drawChart(r.seq);
-
+}
+function showTable(headers, rows){
+  $('head').replaceChildren(...headers.map(h => {
+    const th = document.createElement('th'); th.textContent = h; return th;
+  }));
   const frag = document.createDocumentFragment();
-  r.seq.slice(0, MAX_ROWS).forEach((v,i) => {
+  rows.forEach(cells => {
     const tr = document.createElement('tr');
-    [i, v.toString(), r.ops[i]].forEach(t => {
-      const td = document.createElement('td'); td.textContent = t; tr.appendChild(td);
-    });
+    cells.forEach(t => { const td = document.createElement('td'); td.textContent = t; tr.appendChild(td); });
     frag.appendChild(tr);
   });
   $('rows').replaceChildren(frag);
-  $('truncNote').textContent = r.seq.length > MAX_ROWS ? '表は最初の ' + MAX_ROWS + ' 行のみ表示しています。' : '';
+}
+
+function run(){
+  $('calcErr').textContent = '';
+  const raw = $('start').value.trim()
+    .replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
+    .replace(/[,，\s]/g,'');
+  if (!/^[0-9]+$/.test(raw) || BigInt(raw) < 1n){
+    $('calcErr').textContent = '1以上の正の整数を入力してください。';
+    return;
+  }
+  const n = BigInt(raw);
+
+  if (mode === 'collatz'){
+    const r = collatz(n);
+    const steps = r.seq.length - 1;
+    showStats([
+      ['入力した値', raw],
+      ['1になるまでの回数', steps + '回' + (r.done ? '' : '（上限で停止）')],
+      ['最大値', r.peak.toString()],
+      ['÷2 の回数 / ×3+1 の回数', r.even + ' / ' + r.odd]
+    ]);
+    $('chartBox').classList.remove('hidden');
+    $('tableBox').classList.remove('hidden');
+    drawChart(r.seq);
+    showTable(['#','値','操作'], r.seq.slice(0, MAX_ROWS).map((v,i) => [i, v.toString(), r.ops[i]]));
+    $('truncNote').textContent = r.seq.length > MAX_ROWS ? '表は最初の ' + MAX_ROWS + ' 行のみ表示しています。' : '';
+  } else {
+    $('chartBox').classList.add('hidden');
+    $('tableBox').classList.add('hidden');
+    let result;
+    if (n === 1n){
+      result = '1 は素数でも合成数でもありません';
+    } else {
+      const f = factorize(n);
+      if (f.limited) result = '判定できませんでした（上限で停止）';
+      else if (f.factors.length === 1) result = raw + ' は素数です';
+      else result = raw + ' = ' + formatFactors(f.factors);
+    }
+    showStats([['入力した値', raw], ['結果', result]]);
+  }
   $('result').classList.remove('hidden');
 }
+
+function setMode(m){
+  mode = m;
+  const c = MODES[m];
+  $('title').textContent = c.title;
+  document.title = c.title;
+  $('lead').textContent = c.lead;
+  $('start').value = c.def;
+  $('calcErr').textContent = '';
+  $('result').classList.add('hidden');
+}
+
+$('modeBtn').onclick = () => setMode(mode === 'collatz' ? 'prime' : 'collatz');
 $('calc').onclick = run;
 $('start').addEventListener('keydown', e => { if (e.key === 'Enter') run(); });
+setMode('collatz');
 </script>
 </body>
 </html>
