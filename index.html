@@ -10,7 +10,10 @@
 *{box-sizing:border-box}
 body{margin:0;padding:24px 16px;background:var(--bg);color:var(--fg);font-family:"Hiragino Sans","Yu Gothic",Meiryo,sans-serif;line-height:1.7}
 .wrap{max-width:680px;margin:0 auto;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:24px}
-h1{font-size:1.4rem;margin:0 0 4px}
+h1{font-size:1.4rem;margin:0 0 4px;display:flex;align-items:center;gap:10px}
+.back{flex:none;width:38px;height:38px;padding:0;display:inline-flex;align-items:center;justify-content:center;background:none;color:var(--fg);border:1px solid var(--line);border-radius:50%}
+.back svg{width:20px;height:20px;border:0;border-radius:0}
+.back.hidden{display:none}
 .modebtn{padding:0;background:none;color:var(--fg);font:inherit;font-weight:bold;text-align:left;border:0;border-bottom:2px dotted var(--acc);border-radius:0;cursor:pointer}
 .modebtn small{font-weight:normal;font-size:.75rem;color:var(--acc);margin-left:6px}
 p.lead{margin:0 0 16px;color:var(--sub)}
@@ -30,11 +33,13 @@ table{width:100%;border-collapse:collapse;font-family:ui-monospace,Menlo,Consola
 th,td{padding:6px 10px;text-align:left;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
 th{position:sticky;top:0;background:var(--card)}
 .note{font-size:.85rem;color:var(--sub);margin-top:8px}
+.pick{padding:4px 12px;font-size:.95rem;font-family:inherit;background:none;color:var(--acc);border:1px solid var(--acc);border-radius:6px}
+#picks{margin-top:6px}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1><button type="button" class="modebtn" id="modeBtn" aria-live="polite"><span id="title">コラッツ予想 自動計算</span><small>⇄ タップで切り替え</small></button></h1>
+  <h1><button type="button" class="back hidden" id="backBtn" aria-label="前の画面に戻る"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button><button type="button" class="modebtn" id="modeBtn" aria-live="polite"><span id="title">コラッツ予想 自動計算</span><small>⇄ タップで切り替え</small></button></h1>
   <p class="lead" id="lead"></p>
   <div class="row">
     <input type="text" id="start" inputmode="numeric" value="27" aria-label="開始する整数">
@@ -45,6 +50,10 @@ th{position:sticky;top:0;background:var(--card)}
 
   <div id="result" class="hidden">
     <div class="stats" id="stats"></div>
+    <div id="pickBox" class="hidden">
+      <p class="note" style="margin:0">素数をタップすると、その数をコラッツ予想で計算します。</p>
+      <div class="row" id="picks"></div>
+    </div>
     <div id="chartBox">
       <svg id="chart" viewBox="0 0 600 240" role="img" aria-label="値の推移グラフ"></svg>
       <p class="note">縦軸は対数目盛です。</p>
@@ -201,7 +210,8 @@ function runList(){
     ['範囲', a + ' 〜 ' + b],
     ['見つかった素数', r.out.length + '個' + (r.reason === 'end' ? '' : '（途中まで）')]
   ]);
-  showTable(['#', '素数'], r.out.map((p, i) => [i + 1, p.toString()]));
+  showTable(['#', '素数'], r.out.map((p, i) => [i + 1, p.toString()]), 1);
+  showPicks([], r.out.length > 0);
   $('truncNote').textContent =
     r.reason === 'list' ? '表示上限の ' + MAX_LIST + ' 個に達したため、ここで止めました。続きは開始を ' + r.next + ' にして調べてください。' :
     r.reason === 'scan' ? '調べる数が多いため ' + (r.next - 1n) + ' までで止めました。続きは開始を ' + r.next + ' にして調べてください。' :
@@ -210,6 +220,43 @@ function runList(){
 }
 
 /* ---------- 表示共通 ---------- */
+function pickButton(text){
+  const b = document.createElement('button');
+  b.type = 'button'; b.className = 'pick'; b.textContent = text;
+  b.onclick = () => goCollatz(text);
+  return b;
+}
+function showPicks(arr, show){
+  $('pickBox').classList.toggle('hidden', !show);
+  $('picks').replaceChildren(...arr.map(pickButton));
+}
+const navStack = [];
+function snapshot(){
+  return { mode, start: $('start').value, end: $('end').value, ran: !$('result').classList.contains('hidden') };
+}
+function pushNav(){
+  navStack.push(snapshot());
+  if (navStack.length > 50) navStack.shift();
+  updateBack();
+}
+function updateBack(){ $('backBtn').classList.toggle('hidden', navStack.length === 0); }
+function goBack(){
+  const s = navStack.pop();
+  if (!s) return;
+  setMode(s.mode);
+  $('start').value = s.start;
+  if (s.mode === 'list') $('end').value = s.end;
+  if (s.ran) run();
+  updateBack();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+function goCollatz(text){
+  pushNav();
+  setMode('collatz');
+  $('start').value = text;
+  run();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
 function showStats(items){
   $('stats').replaceChildren(...items.map(([label, val]) => {
     const d = document.createElement('div'); d.className = 'stat';
@@ -218,14 +265,18 @@ function showStats(items){
     d.append(b, s); return d;
   }));
 }
-function showTable(headers, rows){
+function showTable(headers, rows, linkCol){
   $('head').replaceChildren(...headers.map(h => {
     const th = document.createElement('th'); th.textContent = h; return th;
   }));
   const frag = document.createDocumentFragment();
   rows.forEach(cells => {
     const tr = document.createElement('tr');
-    cells.forEach(t => { const td = document.createElement('td'); td.textContent = t; tr.appendChild(td); });
+    cells.forEach((t, i) => {
+      const td = document.createElement('td');
+      if (i === linkCol){ td.appendChild(pickButton(String(t))); } else td.textContent = t;
+      tr.appendChild(td);
+    });
     frag.appendChild(tr);
   });
   $('rows').replaceChildren(frag);
@@ -254,22 +305,25 @@ function run(){
     ]);
     $('chartBox').classList.remove('hidden');
     $('tableBox').classList.remove('hidden');
+    showPicks([], false);
     drawChart(r.seq);
     showTable(['#','値','操作'], r.seq.slice(0, MAX_ROWS).map((v,i) => [i, v.toString(), r.ops[i]]));
     $('truncNote').textContent = r.seq.length > MAX_ROWS ? '表は最初の ' + MAX_ROWS + ' 行のみ表示しています。' : '';
   } else {
     $('chartBox').classList.add('hidden');
     $('tableBox').classList.add('hidden');
-    let result;
+    let result, picks = [];
     if (n === 1n){
       result = '1 は素数でも合成数でもありません';
     } else {
       const f = factorize(n);
+      if (!f.limited) picks = [...new Set(f.factors.map(String))];
       if (f.limited) result = '判定できませんでした（上限で停止）';
       else if (f.factors.length === 1) result = raw + ' は素数です';
       else result = raw + ' = ' + formatFactors(f.factors);
     }
     showStats([['入力した値', raw], ['結果', result]]);
+    showPicks(picks, picks.length > 0);
   }
   $('result').classList.remove('hidden');
 }
@@ -288,7 +342,8 @@ function setMode(m){
   $('result').classList.add('hidden');
 }
 
-$('modeBtn').onclick = () => setMode(ORDER[(ORDER.indexOf(mode) + 1) % ORDER.length]);
+$('modeBtn').onclick = () => { pushNav(); setMode(ORDER[(ORDER.indexOf(mode) + 1) % ORDER.length]); };
+$('backBtn').onclick = goBack;
 $('calc').onclick = run;
 ['start', 'end'].forEach(id => $(id).addEventListener('keydown', e => { if (e.key === 'Enter') run(); }));
 setMode('collatz');
