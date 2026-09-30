@@ -251,7 +251,7 @@ async function runList(){
   const a = BigInt(ra), b = BigInt(rb);
   if (a > b){ $('calcErr').textContent = '開始は終了以下の数にしてください。'; return; }
 
-  const r = await compute('list', { a, b });
+  const r = a < 10n ** 15n ? local('list', { a, b }) : await compute('list', { a, b });
   if (!r) return;
   $('chartBox').classList.add('hidden');
   $('tableBox').classList.remove('hidden');
@@ -306,7 +306,12 @@ function goCollatz(text){
   run();
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
-const WORKER_GLUE = "onmessage=e=>{const{task,arg}=e.data;let r;if(task==='collatz')r=collatz(arg);else if(task==='factor')r=factorize(arg);else r=listPrimes(arg.a,arg.b);postMessage(r);};";
+const WORKER_GLUE = "onmessage=e=>{const{task,arg}=e.data;if(task==='ping'){postMessage({ping:1});return;}let r;if(task==='collatz')r=collatz(arg);else if(task==='factor')r=factorize(arg);else r=listPrimes(arg.a,arg.b);postMessage(r);};";
+let CORE = null;
+function local(task, arg){   // メインスレッドで直接計算（軽い計算用／ワーカーが動かない環境の代替）
+  CORE = CORE || new Function($('core').textContent + ';return {collatz,factorize,listPrimes};')();
+  return task === 'collatz' ? CORE.collatz(arg) : task === 'factor' ? CORE.factorize(arg) : CORE.listPrimes(arg.a, arg.b);
+}
 let worker = null, jobDone = null, timer = null;
 function stopBusy(){ clearInterval(timer); $('busy').classList.add('hidden'); }
 function cancelWork(){
@@ -324,8 +329,20 @@ function compute(task, arg){
     $('busy').classList.remove('hidden');
     $('busyText').textContent = '計算中… 0秒';
     timer = setInterval(() => { $('busyText').textContent = '計算中… ' + Math.floor((Date.now() - t0) / 1000) + '秒'; }, 500);
-    worker.onmessage = e => { const f = jobDone; jobDone = null; worker.terminate(); worker = null; stopBusy(); f(e.data); };
+    let pinged = false;
+    worker.onmessage = e => {
+      if (e.data && e.data.ping){ pinged = true; return; }
+      const f = jobDone; jobDone = null; worker.terminate(); worker = null; stopBusy(); f(e.data);
+    };
+    // 3秒たってもワーカーが応答しない環境では、メインスレッドで計算する
+    setTimeout(() => {
+      if (pinged || jobDone !== resolve) return;
+      worker.terminate(); worker = null; jobDone = null; stopBusy();
+      resolve(local(task, arg));
+    }, 3000);
+    worker.postMessage({ task: 'ping' });
     worker.onerror = () => { cancelWork(); $('calcErr').textContent = '計算中にエラーが起きました。'; };
+    worker.postMessage({ task, arg });
   });
 }
 function showStats(items){
@@ -366,7 +383,7 @@ async function run(){
   const n = BigInt(raw);
 
   if (mode === 'collatz'){
-    const r = await compute('collatz', n);
+    const r = n < 10n ** 30n ? local('collatz', n) : await compute('collatz', n);
     if (!r) return;
     const steps = r.steps;
     showStats([
@@ -389,7 +406,7 @@ async function run(){
     if (n === 1n){
       result = '1 は素数でも合成数でもありません';
     } else {
-      const f = await compute('factor', n);
+      const f = n < 10n ** 15n ? local('factor', n) : await compute('factor', n);
       if (!f) return;
       if (!f.limited) picks = [...new Set(f.factors.map(String))];
       if (f.limited) result = '判定できませんでした（上限で停止）';
